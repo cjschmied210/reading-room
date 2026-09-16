@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "build": "node builder/build.js",
-    "make-instance": "node builder/make-instance.js"
+    "make-instance": "node builder/make-instance.js",
+    "build-site": "node builder/build-site.js",
+    "publish": "node builder/publish.js"
   },
   "dependencies": {
     "react": "^18.3.1",

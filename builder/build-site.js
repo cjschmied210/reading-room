@@ -16,8 +16,13 @@ function titleOf(htmlPath) {
   return m ? m[1] : path.basename(path.dirname(htmlPath));
 }
 
-rmSync(docsDir, { recursive: true, force: true });
+// Clear only what we generate — leave dotfiles alone (docs/.vercel holds the
+// Vercel project link; wiping it would force re-linking on every rebuild).
 mkdirSync(docsDir, { recursive: true });
+for (const entry of readdirSync(docsDir)) {
+  if (entry.startsWith(".")) continue;
+  rmSync(path.join(docsDir, entry), { recursive: true, force: true });
+}
 
 const slugs = existsSync(outDir)
   ? readdirSync(outDir, { withFileTypes: true })

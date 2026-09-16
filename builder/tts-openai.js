@@ -1,4 +1,14 @@
 import { tokenizeWords } from "./tokenize.js";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+// Loads OPENAI_API_KEY (and anything else) from .env at the project root,
+// without overriding a value already set in the shell environment.
+try {
+  process.loadEnvFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "../.env"));
+} catch {
+  // no .env file — fine if OPENAI_API_KEY is set some other way
+}
 
 // One-time narration generation: synthesize speech for the whole text, then
 // transcribe it back with word-level timestamps so the reader can highlight
