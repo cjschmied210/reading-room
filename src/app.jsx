@@ -62,7 +62,27 @@ function ReadingRoom() {
   const timerRef = useRef(null);
   const wiRef = useRef(0);
   const audioRef = useRef(null);
+  const [pageAudioState, setPageAudioState] = useState("idle"); // idle | playing | paused
   useEffect(() => { wiRef.current = wi; }, [wi]);
+
+  // Track the narration <audio> element's own play/pause/ended state, so the
+  // page-mode Listen button can show Listen / Pause / Resume accurately
+  // instead of guessing from a locally-tracked flag that can drift.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a) return;
+    const onPlay = () => setPageAudioState("playing");
+    const onPause = () => setPageAudioState(a.ended ? "idle" : "paused");
+    const onEnded = () => setPageAudioState("idle");
+    a.addEventListener("play", onPlay);
+    a.addEventListener("pause", onPause);
+    a.addEventListener("ended", onEnded);
+    return () => {
+      a.removeEventListener("play", onPlay);
+      a.removeEventListener("pause", onPause);
+      a.removeEventListener("ended", onEnded);
+    };
+  }, [narration]);
 
   // Load available browser voices (list populates async in most browsers)
   useEffect(() => {
@@ -229,7 +249,7 @@ function ReadingRoom() {
 
   // Reset state on text change
   useEffect(() => {
-    setPlaying(false); setWi(0); setChunk(0); setLine(0);
+    setPlaying(false); setWi(0); setChunk(0); setLine(0); setPageAudioState("idle");
     stopSpeech(); stopNarrationAudio();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawText]);
@@ -289,12 +309,14 @@ function ReadingRoom() {
   const activeMode = MODES.find(m => m.id === mode) || MODES[0];
 
   const handleReset = () => {
-    setPlaying(false); setWi(0); setChunk(0); setLine(0);
+    setPlaying(false); setWi(0); setChunk(0); setLine(0); setPageAudioState("idle");
     stopSpeech(); stopNarrationAudio();
+    if (audioRef.current) audioRef.current.currentTime = 0;
   };
   const handleModeSelect = (mId) => {
-    setPlaying(false); setMode(mId); setWi(0); setChunk(0); setLine(0);
+    setPlaying(false); setMode(mId); setWi(0); setChunk(0); setLine(0); setPageAudioState("idle");
     stopSpeech(); stopNarrationAudio();
+    if (audioRef.current) audioRef.current.currentTime = 0;
   };
 
   const getProgressText = () => {
@@ -308,14 +330,28 @@ function ReadingRoom() {
     if (narrationActive) {
       const a = audioRef.current;
       if (!a) return;
-      if (!a.paused) { a.pause(); return; }
-      a.currentTime = 0; a.playbackRate = clampRate(wpm); a.ontimeupdate = null;
+      if (!a.paused) { a.pause(); return; } // -> "paused" via the play/pause listener
+      if (a.ended) a.currentTime = 0; // only rewind after a full run-through
+      a.playbackRate = clampRate(wpm);
+      a.ontimeupdate = null;
       a.onended = null;
       a.play().catch(() => {});
       return;
     }
-    if (!ttsOn || !ttsSupported) return;
-    speakSpeech(paragraphs.join(". "));
+    if (!ttsSupported) return;
+    if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
+      window.speechSynthesis.pause();
+      setPageAudioState("paused");
+      return;
+    }
+    if (window.speechSynthesis.paused) {
+      window.speechSynthesis.resume();
+      setPageAudioState("playing");
+      return;
+    }
+    if (!ttsOn) return;
+    setPageAudioState("playing");
+    speakSpeech(paragraphs.join(". "), { onEnd: () => setPageAudioState("idle") });
   };
 
   return (
@@ -401,7 +437,9 @@ function ReadingRoom() {
           )}
           {mode === "page" && (ttsOn || narrationActive) && (
             <div className="transport">
-              <button type="button" onClick={readPageAloud} className="btn-primary">Listen</button>
+              <button type="button" onClick={readPageAloud} className="btn-primary">
+                {pageAudioState === "playing" ? "Pause" : pageAudioState === "paused" ? "Resume" : "Listen"}
+              </button>
             </div>
           )}
 

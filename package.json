@@ -7,6 +7,7 @@
     "build": "node builder/build.js",
     "make-instance": "node builder/make-instance.js",
     "build-site": "node builder/build-site.js",
+    "rebuild": "node builder/rebuild.js",
     "publish": "node builder/publish.js"
   },
   "dependencies": {
