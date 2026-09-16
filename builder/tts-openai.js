@@ -1,14 +1,6 @@
 import { tokenizeWords } from "./tokenize.js";
-import { fileURLToPath } from "node:url";
-import path from "node:path";
-
-// Loads OPENAI_API_KEY (and anything else) from .env at the project root,
-// without overriding a value already set in the shell environment.
-try {
-  process.loadEnvFile(path.join(path.dirname(fileURLToPath(import.meta.url)), "../.env"));
-} catch {
-  // no .env file — fine if OPENAI_API_KEY is set some other way
-}
+import { estimateTimestamps } from "./estimate-timestamps.js";
+import "./load-env.js";
 
 // One-time narration generation: synthesize speech for the whole text, then
 // transcribe it back with word-level timestamps so the reader can highlight
@@ -44,7 +36,7 @@ export async function generateNarration(rawText, { voice = "alloy", model = "gpt
   const targetWords = tokenizeWords(rawText);
   const wordTimestamps = alignTimestamps(targetWords, whisperWords, estimateDuration(whisperWords));
 
-  return { audioBuffer, wordTimestamps };
+  return { audioBuffer, wordTimestamps, extension: "mp3" };
 }
 
 function estimateDuration(whisperWords) {
@@ -59,13 +51,5 @@ function alignTimestamps(targetWords, whisperWords, totalDuration) {
   if (targetWords.length === whisperWords.length) {
     return targetWords.map((w, i) => ({ word: w, start: whisperWords[i].start, end: whisperWords[i].end }));
   }
-  const totalChars = targetWords.reduce((s, w) => s + w.length + 1, 0) || 1;
-  let t = 0;
-  return targetWords.map(w => {
-    const dur = ((w.length + 1) / totalChars) * totalDuration;
-    const start = t;
-    const end = t + dur;
-    t = end;
-    return { word: w, start, end };
-  });
+  return estimateTimestamps(targetWords, totalDuration);
 }

@@ -4,12 +4,17 @@
 // calls. Usage:
 //   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven
 //   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --tts openai --voice alloy
+//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --tts gemini --voice Kore
 //   node builder/make-instance.js ... --unlock   (keep the edit/presets UI visible; default is locked for students)
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { compileBundle, composeHtml } from "./compile.js";
-import { generateNarration } from "./tts-openai.js";
+
+const TTS_PROVIDERS = {
+  openai: () => import("./tts-openai.js"),
+  gemini: () => import("./tts-gemini.js")
+};
 
 function parseArgs(argv) {
   const args = { lock: true };
@@ -24,7 +29,7 @@ function parseArgs(argv) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (!args.file || !args.out) {
-    console.error("Required: --file <text file> --out <output dir> [--title \"...\"] [--tts openai] [--voice alloy] [--unlock]");
+    console.error("Required: --file <text file> --out <output dir> [--title \"...\"] [--tts openai|gemini] [--voice ...] [--unlock]");
     process.exit(1);
   }
 
@@ -34,12 +39,16 @@ async function main() {
   mkdirSync(outDir, { recursive: true });
 
   let narration = null;
-  if (args.tts === "openai") {
-    console.log("Generating narration via OpenAI (one-time build-time call)...");
-    const { audioBuffer, wordTimestamps } = await generateNarration(rawText, { voice: args.voice || "alloy" });
-    writeFileSync(path.join(outDir, "narration.mp3"), audioBuffer);
-    narration = { audioSrc: "narration.mp3", wordTimestamps };
-    console.log(`Narration saved: ${outDir}/narration.mp3 (${wordTimestamps.length} words aligned)`);
+  if (args.tts) {
+    const provider = TTS_PROVIDERS[args.tts];
+    if (!provider) throw new Error(`Unknown --tts provider "${args.tts}". Use "openai" or "gemini".`);
+    console.log(`Generating narration via ${args.tts} (one-time build-time call)...`);
+    const { generateNarration } = await provider();
+    const { audioBuffer, wordTimestamps, extension } = await generateNarration(rawText, args.voice ? { voice: args.voice } : {});
+    const audioFile = `narration.${extension}`;
+    writeFileSync(path.join(outDir, audioFile), audioBuffer);
+    narration = { audioSrc: audioFile, wordTimestamps };
+    console.log(`Narration saved: ${outDir}/${audioFile} (${wordTimestamps.length} words)`);
   }
 
   const { js, css } = await compileBundle();
