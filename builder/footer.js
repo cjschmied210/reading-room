@@ -1,11 +1,16 @@
 // Shared site-wide footer, injected into both the reader shell (compile.js)
 // and the homepage (build-site.js) so the two never drift apart.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const markBase64 = readFileSync(path.join(__dirname, "assets/bridgeview-mark.png")).toString("base64");
+const MARK_DATA_URI = `data:image/png;base64,${markBase64}`;
+
 export const FOOTER_HTML = `<footer class="site-footer">
     <div class="site-footer-inner">
-      <svg class="site-footer-mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-        <path d="M9 5v22M9 5h9.5a5 5 0 0 1 0 10H9m0 0h10a5 5 0 0 1 0 10H9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M23.5 5H27v3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      <img class="site-footer-mark" src="${MARK_DATA_URI}" alt="" />
       <span>Built at Bridgeview</span>
     </div>
   </footer>`;
@@ -17,8 +22,8 @@ export const FOOTER_CSS = `
 }
 .site-footer-inner {
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 10px 16px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-  font-size: 13px; color: #44403c;
+  padding: 8px 16px; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 15px; color: #1a1a1a;
 }
-.site-footer-mark { width: 20px; height: 20px; color: #44403c; flex-shrink: 0; }
+.site-footer-mark { height: 28px; width: auto; flex-shrink: 0; }
 `;
