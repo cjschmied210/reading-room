@@ -17,7 +17,7 @@ export const FOOTER_HTML = `<footer class="site-footer">
 
 export const FOOTER_CSS = `
 .site-footer {
-  background: #ffffff; border-top: 3px solid #0f3d3e;
+  background: #ffffff; border-top: 3px solid #0f3d3e; flex-shrink: 0;
 }
 .site-footer-inner {
   display: flex; align-items: center; justify-content: center; gap: 8px;

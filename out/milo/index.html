@@ -36,6 +36,9 @@ body {
   color: var(--ink);
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 button {
@@ -76,9 +79,10 @@ input[type=range]:focus-visible {
 
 .wrap {
   max-width: 1060px;
+  width: 100%;
   margin: 0 auto;
   padding: 32px 28px 64px;
-  min-height: 100vh;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -314,7 +318,7 @@ h1.doc-title {
 }
 
 .site-footer {
-  background: #ffffff; border-top: 3px solid #0f3d3e;
+  background: #ffffff; border-top: 3px solid #0f3d3e; flex-shrink: 0;
 }
 .site-footer-inner {
   display: flex; align-items: center; justify-content: center; gap: 8px;

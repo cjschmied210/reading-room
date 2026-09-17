@@ -100,8 +100,9 @@ const indexHtml = `<!DOCTYPE html>
   body {
     margin: 0; background: var(--paper); color: var(--ink);
     font-family: Georgia, 'Times New Roman', serif;
+    min-height: 100vh; display: flex; flex-direction: column;
   }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 64px 24px; }
+  .wrap { max-width: 720px; width: 100%; margin: 0 auto; padding: 64px 24px; flex: 1 0 auto; box-sizing: border-box; }
   h1 { font-size: 34px; font-weight: 400; margin-bottom: 8px; }
   p.sub { color: var(--ink-muted); font-family: -apple-system, sans-serif; font-size: 14px; margin-top: 0; }
   .cards { margin-top: 32px; display: flex; flex-direction: column; gap: 10px; }
