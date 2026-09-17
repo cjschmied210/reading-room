@@ -52,12 +52,7 @@ function ReadingRoom() {
   const [phraseWords, setPhraseWords] = useState(3);
   const [isEditing, setIsEditing] = useState(false);
 
-  // --- TTS state ---
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
-  const [ttsOn, setTtsOn] = useState(false);
-  const [voices, setVoices] = useState([]);
-  const [voiceURI, setVoiceURI] = useState("");
-  const [useNarration, setUseNarration] = useState(!!narration);
 
   const timerRef = useRef(null);
   const wiRef = useRef(0);
@@ -83,23 +78,6 @@ function ReadingRoom() {
       a.removeEventListener("ended", onEnded);
     };
   }, [narration]);
-
-  // Load available browser voices (list populates async in most browsers)
-  useEffect(() => {
-    if (!ttsSupported) return;
-    const load = () => {
-      const list = window.speechSynthesis.getVoices();
-      setVoices(list);
-      if (!voiceURI && list.length) {
-        const preferred = list.find(v => /en/i.test(v.lang) && /premium|enhanced|natural|neural/i.test(v.name)) || list.find(v => /en/i.test(v.lang)) || list[0];
-        setVoiceURI(preferred.voiceURI);
-      }
-    };
-    load();
-    window.speechSynthesis.onvoiceschanged = load;
-    return () => { window.speechSynthesis.onvoiceschanged = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsSupported]);
 
   // Cleaned text paragraphs
   const paragraphs = useMemo(() => {
@@ -153,36 +131,37 @@ function ReadingRoom() {
     if (a) { a.pause(); a.ontimeupdate = null; a.onended = null; }
   };
 
-  const speakSpeech = useCallback((text, { onWord, onEnd, rate } = {}) => {
+  // Best-effort default voice for the browser-TTS fallback (no picker UI —
+  // this only matters for a reading with no baked narration).
+  const pickVoice = () => {
+    if (!ttsSupported) return null;
+    const list = window.speechSynthesis.getVoices();
+    return list.find(v => /en/i.test(v.lang) && /premium|enhanced|natural|neural/i.test(v.name))
+      || list.find(v => /en/i.test(v.lang))
+      || list[0]
+      || null;
+  };
+
+  const speakSpeech = useCallback((text, { onEnd, rate } = {}) => {
     if (!ttsSupported) return;
     window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    const v = voices.find(v => v.voiceURI === voiceURI);
+    const v = pickVoice();
     if (v) utter.voice = v;
     utter.rate = rate ?? clampRate(wpm);
-    if (onWord) utter.onboundary = (e) => { if (!e.name || e.name === "word") onWord(); };
     if (onEnd) utter.onend = onEnd;
     window.speechSynthesis.speak(utter);
-  }, [ttsSupported, voices, voiceURI, wpm]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ttsSupported, wpm]);
 
-  const narrationActive = !!narration && useNarration;
+  const narrationActive = !!narration;
 
-  // Continuous playback driver for guide / word modes. Deliberately does not
-  // sync to narration audio — estimated (non-measured) word timings drift
-  // noticeably, so narration is offered separately as a plain Listen track
-  // instead (see toggleListen) rather than driving this highlight.
+  // Continuous playback driver for guide / word modes — purely visual,
+  // timer-paced. Narration audio only ever plays on the Page mode's Listen
+  // control (see toggleListen); these modes don't touch it at all.
   useEffect(() => {
-    if (!playing || (mode !== "guide" && mode !== "word")) { stopTimer(); stopSpeech(); return; }
+    if (!playing || (mode !== "guide" && mode !== "word")) { stopTimer(); return; }
 
-    if (ttsOn && ttsSupported) {
-      const startIdx = wiRef.current;
-      const text = words.slice(startIdx).join(" ");
-      speakSpeech(text, {
-        onWord: () => setWi(prev => Math.min(prev + 1, words.length)),
-        onEnd: () => setPlaying(false)
-      });
-      return () => stopSpeech();
-    }
     const stepCount = mode === "guide" ? phraseWords : 1;
     const intervalMs = (stepCount * 60000) / wpm;
     stopTimer();
@@ -194,8 +173,7 @@ function ReadingRoom() {
       });
     }, intervalMs);
     return stopTimer;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, wpm, mode, phraseWords, words.length, ttsOn]);
+  }, [playing, wpm, mode, phraseWords, words.length]);
 
   // Reset state on text change
   useEffect(() => {
@@ -228,25 +206,14 @@ function ReadingRoom() {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, phrases.length, sentences.length, narrationActive, ttsOn]);
+  }, [mode, phrases.length, sentences.length]);
 
   const advancePhrase = (dir) => {
-    setChunk(c => {
-      const next = Math.max(0, Math.min(phrases.length, c + dir));
-      if (dir > 0 && next > 0 && ttsOn) {
-        const p = phrases[next - 1];
-        if (p) speakSpeech(p.t);
-      }
-      return next;
-    });
+    setChunk(c => Math.max(0, Math.min(phrases.length, c + dir)));
   };
 
   const moveLine = (dir) => {
-    setLine(l => {
-      const next = Math.max(0, Math.min(sentences.length - 1, l + dir));
-      if (ttsOn && sentences[next]) speakSpeech(sentences[next]);
-      return next;
-    });
+    setLine(l => Math.max(0, Math.min(sentences.length - 1, l + dir)));
   };
 
   const activeMode = MODES.find(m => m.id === mode) || MODES[0];
@@ -302,7 +269,6 @@ function ReadingRoom() {
       setListenState("playing");
       return;
     }
-    if (!ttsOn) return;
     setListenState("playing");
     speakSpeech(paragraphs.join(". "), { onEnd: () => setListenState("idle") });
   };
@@ -317,20 +283,6 @@ function ReadingRoom() {
             {narration && <span className="pill">🔊 narrated</span>}
           </div>
           <div className="topbar-right">
-            {(ttsSupported || narration) && (
-              <button
-                className={`btn-ghost ${ttsOn || narrationActive ? "on" : ""}`}
-                onClick={() => {
-                  if (narration) setUseNarration(u => !u);
-                  else setTtsOn(t => !t);
-                  handleReset();
-                  stopListen();
-                }}
-                title="Toggle text-to-speech"
-              >
-                {narrationActive ? "🔊 Narration on" : ttsOn ? "🔊 Read aloud on" : "🔈 Read aloud"}
-              </button>
-            )}
             {!locked && (
               <button className="btn-ghost" onClick={() => setIsEditing(true)}>✎ Edit Text / Presets</button>
             )}
@@ -338,19 +290,6 @@ function ReadingRoom() {
         </div>
 
         <h1 className="doc-title">{title}</h1>
-
-        {(ttsOn || narrationActive) && ttsSupported && !narration && (
-          <div className="section-label" style={{ marginTop: -16, marginBottom: 20 }}>
-            <label className="slider-label" style={{ display: "inline-flex" }}>
-              Voice
-              <select value={voiceURI} onChange={e => setVoiceURI(e.target.value)}>
-                {voices.filter(v => /en/i.test(v.lang)).map(v => (
-                  <option key={v.voiceURI} value={v.voiceURI}>{v.name} ({v.lang})</option>
-                ))}
-              </select>
-            </label>
-          </div>
-        )}
 
         <div className="section-label">How do you want it presented?</div>
         <div className="mode-grid">
@@ -389,7 +328,7 @@ function ReadingRoom() {
               <span className="progress-text">{getProgressText()}</span>
             </div>
           )}
-          {mode === "page" && (narrationActive || ttsOn) && (
+          {mode === "page" && (narrationActive || ttsSupported) && (
             <div className="transport">
               <button type="button" onClick={toggleListen} className="btn-primary">
                 {listenState === "playing" ? "Pause" : listenState === "paused" ? "Resume" : "Listen"}
