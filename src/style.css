@@ -20,6 +20,10 @@ html, body {
 }
 
 body {
+  padding-bottom: 48px; /* clearance for the fixed site footer */
+}
+
+body {
   background-color: var(--paper);
   color: var(--ink);
   font-family: var(--font-body);

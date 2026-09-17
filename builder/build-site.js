@@ -4,6 +4,7 @@
 import { readdirSync, existsSync, rmSync, mkdirSync, cpSync, writeFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FOOTER_HTML, FOOTER_CSS } from "./footer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -99,6 +100,7 @@ const indexHtml = `<!DOCTYPE html>
   body {
     margin: 0; background: var(--paper); color: var(--ink);
     font-family: Georgia, 'Times New Roman', serif;
+    padding-bottom: 48px;
   }
   .wrap { max-width: 720px; margin: 0 auto; padding: 64px 24px; }
   h1 { font-size: 34px; font-weight: 400; margin-bottom: 8px; }
@@ -129,6 +131,7 @@ const indexHtml = `<!DOCTYPE html>
   }
   .reading-link:hover { color: var(--accent); }
   .empty { color: var(--ink-muted); font-family: -apple-system, sans-serif; font-size: 14px; margin-top: 32px; }
+${FOOTER_CSS}
 </style>
 </head>
 <body>
@@ -137,6 +140,7 @@ const indexHtml = `<!DOCTYPE html>
     <p class="sub">Readings for class — pick a teacher to see their list.</p>
     ${cards ? `<div class="cards">\n${cards}\n    </div>` : '<p class="empty">No readings published yet.</p>'}
   </div>
+  ${FOOTER_HTML}
 </body>
 </html>
 `;

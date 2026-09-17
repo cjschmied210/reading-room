@@ -2,6 +2,7 @@ import esbuild from "esbuild";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { FOOTER_HTML, FOOTER_CSS } from "./footer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -17,7 +18,7 @@ export async function compileBundle() {
     logLevel: "silent"
   });
   const js = result.outputFiles[0].text;
-  const css = readFileSync(path.join(root, "src/style.css"), "utf8");
+  const css = readFileSync(path.join(root, "src/style.css"), "utf8") + FOOTER_CSS;
   return { js, css };
 }
 
@@ -28,7 +29,8 @@ export function composeHtml({ js, css, title, data, teacher = "" }) {
     .replace("__TEACHER__", escapeHtml(teacher))
     .replace("/*__CSS__*/", css)
     .replace("/*__DATA__*/null", JSON.stringify(data))
-    .replace("/*__JS__*/", js);
+    .replace("/*__JS__*/", js)
+    .replace("<!--__FOOTER__-->", FOOTER_HTML);
 }
 
 function escapeHtml(s) {
