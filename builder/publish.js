@@ -1,7 +1,13 @@
 #!/usr/bin/env node
 // One-command publish: bake a text into an instance, rebuild the site index,
 // deploy to Vercel, and push the source to GitHub.
-//   node builder/publish.js --title "The Raven" --file raven.txt --teacher "J. Smith" [--tts openai] [--voice alloy] [--unlock]
+//   node builder/publish.js --title "The Raven" --file raven.txt --teacher "J. Smith" [--tts openai] [--voice alloy] [--unlock] [--slug the-raven]
+//
+// --slug overrides the URL slug (bridgeviewfolio.com/<slug>/); it is NOT a
+// path — don't pass "out/..." here (that's make-instance.js's --out, a
+// different flag). Omit it and the title is slugified automatically. Reusing
+// an existing slug overwrites that reading in place (e.g. to add narration
+// to something already published).
 
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -31,7 +37,7 @@ if (!args.file || !args.title || !args.teacher) {
   process.exit(1);
 }
 
-const slug = (args.out || args.title)
+const slug = (args.slug || args.title)
   .toLowerCase()
   .replace(/[^a-z0-9]+/g, "-")
   .replace(/^-+|-+$/g, "");
