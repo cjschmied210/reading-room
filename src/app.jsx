@@ -261,6 +261,10 @@ function ReadingRoom() {
   const handleModeSelect = (mId) => {
     setPlaying(false); setMode(mId); setWi(0); setChunk(0); setLine(0);
     stopSpeech();
+    // Listen only has a visible control on the Page mode — pause (not reset)
+    // narration audio when leaving it, so it doesn't keep running with no
+    // way to stop it. Resuming in Page mode picks back up where it left off.
+    if (audioRef.current && !audioRef.current.paused) audioRef.current.pause();
   };
 
   const stopListen = () => {
@@ -385,7 +389,7 @@ function ReadingRoom() {
               <span className="progress-text">{getProgressText()}</span>
             </div>
           )}
-          {(narrationActive || (mode === "page" && ttsOn)) && (
+          {mode === "page" && (narrationActive || ttsOn) && (
             <div className="transport">
               <button type="button" onClick={toggleListen} className="btn-primary">
                 {listenState === "playing" ? "Pause" : listenState === "paused" ? "Resume" : "Listen"}
