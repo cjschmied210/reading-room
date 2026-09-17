@@ -17,7 +17,6 @@ export const FOOTER_HTML = `<footer class="site-footer">
 
 export const FOOTER_CSS = `
 .site-footer {
-  position: fixed; left: 0; right: 0; bottom: 0; z-index: 100;
   background: #ffffff; border-top: 3px solid #0f3d3e;
 }
 .site-footer-inner {

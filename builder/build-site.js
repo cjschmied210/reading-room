@@ -100,7 +100,6 @@ const indexHtml = `<!DOCTYPE html>
   body {
     margin: 0; background: var(--paper); color: var(--ink);
     font-family: Georgia, 'Times New Roman', serif;
-    padding-bottom: 48px;
   }
   .wrap { max-width: 720px; margin: 0 auto; padding: 64px 24px; }
   h1 { font-size: 34px; font-weight: 400; margin-bottom: 8px; }
