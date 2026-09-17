@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One-command publish: bake a text into an instance, rebuild the site index,
 // deploy to Vercel, and push the source to GitHub.
-//   node builder/publish.js --title "The Raven" --file raven.txt [--tts openai] [--voice alloy] [--unlock]
+//   node builder/publish.js --title "The Raven" --file raven.txt --teacher "J. Smith" [--tts openai] [--voice alloy] [--unlock]
 
 import { execFileSync } from "node:child_process";
 import path from "node:path";
@@ -26,8 +26,8 @@ function run(cmd, args, opts = {}) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-if (!args.file || !args.title) {
-  console.error('Required: --title "..." --file <text file> [--tts openai] [--voice alloy] [--unlock]');
+if (!args.file || !args.title || !args.teacher) {
+  console.error('Required: --title "..." --file <text file> --teacher "Name" [--tts openai] [--voice alloy] [--unlock]');
   process.exit(1);
 }
 
@@ -37,7 +37,7 @@ const slug = (args.out || args.title)
   .replace(/^-+|-+$/g, "");
 const outPath = `out/${slug}`;
 
-const instanceArgs = ["builder/make-instance.js", "--title", args.title, "--file", args.file, "--out", outPath];
+const instanceArgs = ["builder/make-instance.js", "--title", args.title, "--file", args.file, "--out", outPath, "--teacher", args.teacher];
 if (args.tts) instanceArgs.push("--tts", args.tts);
 if (args.voice) instanceArgs.push("--voice", args.voice);
 if (args.unlock) instanceArgs.push("--unlock");

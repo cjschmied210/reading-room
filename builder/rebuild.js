@@ -23,6 +23,11 @@ function extractData(html) {
   return JSON.parse(blob);
 }
 
+function extractTeacher(html) {
+  const m = html.match(/<meta name="reading-teacher" content="([^"]*)">/);
+  return m ? m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : "";
+}
+
 async function main() {
   if (!existsSync(outDir)) { console.log("No instances in out/ yet."); return; }
   const slugs = readdirSync(outDir, { withFileTypes: true })
@@ -34,8 +39,10 @@ async function main() {
   const { js, css } = await compileBundle();
   for (const slug of slugs) {
     const file = path.join(outDir, slug, "index.html");
-    const data = extractData(readFileSync(file, "utf8"));
-    const html = composeHtml({ js, css, title: data.title, data });
+    const existing = readFileSync(file, "utf8");
+    const data = extractData(existing);
+    const teacher = extractTeacher(existing);
+    const html = composeHtml({ js, css, title: data.title, teacher, data });
     writeFileSync(file, html);
     console.log(`Rebuilt ${slug}`);
   }

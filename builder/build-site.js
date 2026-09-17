@@ -1,5 +1,6 @@
-// Assembles docs/ — the folder GitHub Pages serves — from every instance in out/.
-// Run this after generating or updating readings with make-instance.js.
+// Assembles docs/ — the folder GitHub Pages/Vercel serves — from every
+// instance in out/, grouped by teacher into disclosure cards on the home
+// page. Run this after generating or updating readings with make-instance.js.
 import { readdirSync, existsSync, rmSync, mkdirSync, cpSync, writeFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,11 +10,29 @@ const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "out");
 const docsDir = path.join(root, "docs");
 const DOMAIN = "bridgeviewfolio.com";
+const UNSORTED = "Unsorted";
 
-function titleOf(htmlPath) {
-  const html = readFileSync(htmlPath, "utf8");
+function unescapeHtml(s) {
+  return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"');
+}
+
+function titleOf(html, fallback) {
   const m = html.match(/<title>([^<]*)<\/title>/i);
-  return m ? m[1] : path.basename(path.dirname(htmlPath));
+  return m ? unescapeHtml(m[1]) : fallback;
+}
+
+function teacherOf(html) {
+  const m = html.match(/<meta name="reading-teacher" content="([^"]*)">/);
+  const name = m ? unescapeHtml(m[1]).trim() : "";
+  return name || UNSORTED;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+function slugify(s) {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 // Clear only what we generate — leave dotfiles alone (docs/.vercel holds the
@@ -34,12 +53,37 @@ const slugs = existsSync(outDir)
 const readings = slugs.map(slug => {
   const src = path.join(outDir, slug);
   cpSync(src, path.join(docsDir, slug), { recursive: true });
-  return { slug, title: titleOf(path.join(src, "index.html")) };
+  const html = readFileSync(path.join(src, "index.html"), "utf8");
+  return { slug, title: titleOf(html, slug), teacher: teacherOf(html) };
 });
 
-const listItems = readings.map(r =>
-  `        <li><a class="reading-link" href="./${r.slug}/">${escapeHtml(r.title)}</a></li>`
-).join("\n");
+const byTeacher = new Map();
+for (const r of readings) {
+  if (!byTeacher.has(r.teacher)) byTeacher.set(r.teacher, []);
+  byTeacher.get(r.teacher).push(r);
+}
+
+const teacherNames = [...byTeacher.keys()]
+  .filter(t => t !== UNSORTED)
+  .sort((a, b) => a.localeCompare(b));
+if (byTeacher.has(UNSORTED)) teacherNames.push(UNSORTED);
+
+const cards = teacherNames.map(teacher => {
+  const list = byTeacher.get(teacher)
+    .sort((a, b) => a.title.localeCompare(b.title))
+    .map(r => `        <li><a class="reading-link" href="./${r.slug}/">${escapeHtml(r.title)}</a></li>`)
+    .join("\n");
+  const count = byTeacher.get(teacher).length;
+  return `    <details class="teacher-card">
+      <summary>
+        <span class="teacher-name">${escapeHtml(teacher)}</span>
+        <span class="teacher-count">${count} reading${count === 1 ? "" : "s"}</span>
+      </summary>
+      <ul>
+${list}
+      </ul>
+    </details>`;
+}).join("\n");
 
 const indexHtml = `<!DOCTYPE html>
 <html lang="en">
@@ -59,34 +103,46 @@ const indexHtml = `<!DOCTYPE html>
   .wrap { max-width: 720px; margin: 0 auto; padding: 64px 24px; }
   h1 { font-size: 34px; font-weight: 400; margin-bottom: 8px; }
   p.sub { color: var(--ink-muted); font-family: -apple-system, sans-serif; font-size: 14px; margin-top: 0; }
-  ul { list-style: none; padding: 0; margin-top: 32px; }
-  li { border-bottom: 1px solid var(--border); }
+  .cards { margin-top: 32px; display: flex; flex-direction: column; gap: 10px; }
+  .teacher-card {
+    border: 1px solid var(--border); border-radius: 8px; background: white; overflow: hidden;
+  }
+  .teacher-card summary {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 18px 20px; cursor: pointer; list-style: none; font-size: 20px;
+  }
+  .teacher-card summary::-webkit-details-marker { display: none; }
+  .teacher-card summary::after {
+    content: "+"; font-family: -apple-system, sans-serif; font-size: 20px; color: var(--ink-muted);
+    transition: transform 0.15s;
+  }
+  .teacher-card[open] summary::after { transform: rotate(45deg); }
+  .teacher-card summary:hover { background: var(--accent-soft); }
+  .teacher-name { font-weight: 400; }
+  .teacher-count { font-family: -apple-system, sans-serif; font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
+  .teacher-card ul { list-style: none; margin: 0; padding: 0 20px 12px; border-top: 1px solid var(--border); }
+  .teacher-card li { border-bottom: 1px solid var(--border); }
+  .teacher-card li:last-child { border-bottom: none; }
   .reading-link {
-    display: block; padding: 16px 4px; color: var(--ink); text-decoration: none; font-size: 19px;
+    display: block; padding: 14px 4px; color: var(--ink); text-decoration: none; font-size: 17px;
     transition: color 0.15s;
   }
   .reading-link:hover { color: var(--accent); }
-  .empty { color: var(--ink-muted); font-family: -apple-system, sans-serif; font-size: 14px; }
+  .empty { color: var(--ink-muted); font-family: -apple-system, sans-serif; font-size: 14px; margin-top: 32px; }
 </style>
 </head>
 <body>
   <div class="wrap">
     <h1>Bridgeview Folio</h1>
-    <p class="sub">Readings for class — pick one to open.</p>
-    <ul>
-${listItems || '      <li class="empty">No readings published yet.</li>'}
-    </ul>
+    <p class="sub">Readings for class — pick a teacher to see their list.</p>
+    ${cards ? `<div class="cards">\n${cards}\n    </div>` : '<p class="empty">No readings published yet.</p>'}
   </div>
 </body>
 </html>
 `;
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-}
-
 writeFileSync(path.join(docsDir, "index.html"), indexHtml);
 writeFileSync(path.join(docsDir, "CNAME"), DOMAIN + "\n");
 writeFileSync(path.join(docsDir, ".nojekyll"), "");
 
-console.log(`Built docs/ with ${readings.length} reading(s): ${readings.map(r => r.slug).join(", ") || "(none)"}`);
+console.log(`Built docs/ with ${readings.length} reading(s) across ${teacherNames.length} teacher(s): ${teacherNames.join(", ") || "(none)"}`);

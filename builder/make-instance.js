@@ -2,9 +2,9 @@
 // Builds a standalone, text-specific reader: one HTML file (plus an optional
 // narration.mp3) that runs entirely in the browser with zero further API
 // calls. Usage:
-//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven
-//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --tts openai --voice alloy
-//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --tts gemini --voice Kore
+//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --teacher "J. Smith"
+//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --teacher "J. Smith" --tts openai --voice alloy
+//   node builder/make-instance.js --title "The Raven" --file raven.txt --out out/the-raven --teacher "J. Smith" --tts gemini --voice Kore
 //   node builder/make-instance.js ... --unlock   (keep the edit/presets UI visible; default is locked for students)
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
@@ -28,8 +28,8 @@ function parseArgs(argv) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (!args.file || !args.out) {
-    console.error("Required: --file <text file> --out <output dir> [--title \"...\"] [--tts openai|gemini] [--voice ...] [--unlock]");
+  if (!args.file || !args.out || !args.teacher) {
+    console.error("Required: --file <text file> --out <output dir> --teacher \"Name\" [--title \"...\"] [--tts openai|gemini] [--voice ...] [--unlock]");
     process.exit(1);
   }
 
@@ -53,7 +53,7 @@ async function main() {
 
   const { js, css } = await compileBundle();
   const html = composeHtml({
-    js, css, title,
+    js, css, title, teacher: args.teacher,
     data: { title, text: rawText, locked: args.lock, narration }
   });
   writeFileSync(path.join(outDir, "index.html"), html);

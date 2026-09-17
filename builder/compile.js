@@ -21,10 +21,11 @@ export async function compileBundle() {
   return { js, css };
 }
 
-export function composeHtml({ js, css, title, data }) {
+export function composeHtml({ js, css, title, data, teacher = "" }) {
   const shell = readFileSync(path.join(__dirname, "shell.html"), "utf8");
   return shell
     .replace("__TITLE__", escapeHtml(title))
+    .replace("__TEACHER__", escapeHtml(teacher))
     .replace("/*__CSS__*/", css)
     .replace("/*__DATA__*/null", JSON.stringify(data))
     .replace("/*__JS__*/", js);
