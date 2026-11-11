@@ -3,10 +3,15 @@
 // keeping each instance's baked data (text, narration, lock state) as-is —
 // no narration is regenerated, so this makes no API calls. Run this after
 // changing src/app.jsx or src/style.css.
+//
+// --align also re-measures word timings from each instance's existing audio
+// (local Whisper via builder/align.js; slow, still no API calls).
+// Naming instances limits the run to them: rebuild.js --align malala-english
 import { readdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { compileBundle, composeHtml } from "./compile.js";
+import { alignWords } from "./align.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -29,10 +34,12 @@ function extractTeacher(html) {
 }
 
 async function main() {
+  const only = process.argv.slice(2).filter(a => !a.startsWith("--"));
   if (!existsSync(outDir)) { console.log("No instances in out/ yet."); return; }
   const slugs = readdirSync(outDir, { withFileTypes: true })
     .filter(d => d.isDirectory() && existsSync(path.join(outDir, d.name, "index.html")))
-    .map(d => d.name);
+    .map(d => d.name)
+    .filter(name => !only.length || only.includes(name));
 
   if (!slugs.length) { console.log("No instances in out/ yet."); return; }
 
@@ -42,6 +49,16 @@ async function main() {
     const existing = readFileSync(file, "utf8");
     const data = extractData(existing);
     const teacher = extractTeacher(existing);
+    if (process.argv.includes("--align") && data.narration) {
+      const measured = alignWords(path.join(outDir, slug, data.narration.audioSrc), data.text);
+      if (measured) {
+        data.narration.wordTimestamps = measured.timestamps;
+        data.narration.timing = "measured";
+        console.log(`Aligned ${slug} (${Math.round(measured.matched * 100)}% of words matched)`);
+      } else {
+        console.log(`Could not align ${slug}; keeping its existing timings`);
+      }
+    }
     const html = composeHtml({ js, css, title: data.title, teacher, data });
     writeFileSync(file, html);
     console.log(`Rebuilt ${slug}`);

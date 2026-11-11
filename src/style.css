@@ -304,3 +304,20 @@ h1.doc-title {
 .locked-note {
   font-size: 12px; font-family: var(--font-sans); color: var(--ink-muted);
 }
+
+.page-word.on {
+  background: var(--accent-soft);
+  box-shadow: 0 2px 0 var(--accent);
+  border-radius: 2px;
+}
+
+.window-line { cursor: pointer; }
+
+.float-transport {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 40;
+  padding: 10px 20px;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.22);
+}

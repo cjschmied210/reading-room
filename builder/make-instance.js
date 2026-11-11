@@ -10,6 +10,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { compileBundle, composeHtml } from "./compile.js";
+import { alignWords } from "./align.js";
 
 const TTS_PROVIDERS = {
   openai: () => import("./tts-openai.js"),
@@ -47,8 +48,15 @@ async function main() {
     const { audioBuffer, wordTimestamps, extension } = await generateNarration(rawText, args.voice ? { voice: args.voice } : {});
     const audioFile = `narration.${extension}`;
     writeFileSync(path.join(outDir, audioFile), audioBuffer);
-    narration = { audioSrc: audioFile, wordTimestamps };
     console.log(`Narration saved: ${outDir}/${audioFile} (${wordTimestamps.length} words)`);
+    console.log("Measuring word timings from the audio (local, no API calls)...");
+    const measured = alignWords(path.join(outDir, audioFile), rawText);
+    narration = measured
+      ? { audioSrc: audioFile, timing: "measured", wordTimestamps: measured.timestamps }
+      : { audioSrc: audioFile, timing: "estimated", wordTimestamps };
+    console.log(measured
+      ? `Word timings measured (${Math.round(measured.matched * 100)}% of words matched) — highlighting and read-aloud in every mode are on.`
+      : "Could not measure word timings (is .venv set up?) — the audio plays on the Page view only, without highlighting.");
   }
 
   const { js, css } = await compileBundle();

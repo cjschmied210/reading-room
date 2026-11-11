@@ -1,14 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-const { useState, useEffect, useRef, useMemo, useCallback } = React;
+const { useState, useEffect, useRef, useMemo } = React;
 
 const MODES = [
   { id: "page", label: "Page", blurb: "The whole text at once, set like a printed page.", keys: "Scroll or read at your leisure." },
   { id: "guide", label: "Moving guide", blurb: "A smooth highlight sweeps forward at your set pace.", keys: "Space starts or pauses the guide." },
   { id: "phrase", label: "Phrases", blurb: "One phrase at a time, stepped at your own pace.", keys: "Space / Right Arrow reveals next phrase. Left Arrow steps back." },
   { id: "word", label: "One word", blurb: "Words arrive in place. Your eyes stay fixed in position.", keys: "Space starts or pauses playback." },
-  { id: "window", label: "Focus window", blurb: "A few lines lit; text outside the window dims.", keys: "Up / Down Arrow keys move the focus window." }
+  { id: "window", label: "Focus window", blurb: "A few lines lit; text outside the window dims.", keys: "Up / Down Arrow keys move the focus window. Click a line to jump to it." }
 ];
 
 const PRESETS = [
@@ -26,14 +26,38 @@ const PRESETS = [
   }
 ];
 
+
 // Injected by the builder for a baked, text-specific instance.
-// Shape: { title, text, locked, narration: { audioSrc, wordTimestamps: [{word,start,end}, ...] } | null }
+// Shape: { title, text, locked, narration: { audioSrc, timing, wordTimestamps: [{start,end}, ...] } | null }
+// narration.timing === "measured" means the word times were measured from the
+// audio itself (builder/align.py). Anything else is a rough estimate that
+// drifts, so the reader still plays the audio but keeps word-synced features
+// (highlighting, read-aloud in the stepped modes) switched off.
 const DATA = typeof window !== "undefined" ? window.__READER_DATA__ || null : null;
 
-function clampRate(wpm) {
-  const r = wpm / 180;
-  return Math.max(0.5, Math.min(3, r));
+const SENTENCE_END = /[.!?…]["'”’»)\]]*$/;
+const ABBREVIATION = /^(?:dr|dra|mr|mrs|ms|prof|sr|sra|srta|jr|st|vs|etc|no|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|\p{L})\.$/iu;
+
+function isAbbreviation(token) {
+  return ABBREVIATION.test(token.replace(/^[^\p{L}\p{N}]+/u, ""));
 }
+
+function startsLowercase(token) {
+  const m = token.match(/\p{L}/u);
+  return !!m && m[0] === m[0].toLowerCase() && m[0] !== m[0].toUpperCase();
+}
+
+const PageParagraph = React.memo(function PageParagraph({ group, active }) {
+  return (
+    <p className="page-p">
+      {group.map(w => (
+        <React.Fragment key={w.i}>
+          <span data-w={w.i} className={w.i === active ? "page-word on" : "page-word"}>{w.t}</span>{" "}
+        </React.Fragment>
+      ))}
+    </p>
+  );
+});
 
 function ReadingRoom() {
   const [title, setTitle] = useState(DATA?.title || PRESETS[0].title);
@@ -47,37 +71,21 @@ function ReadingRoom() {
   const [chunk, setChunk] = useState(0);
   const [line, setLine] = useState(0);
   const [wpm, setWpm] = useState(220);
+  const [rate, setRate] = useState(1);
   const [size, setSize] = useState(21);
   const [measure, setMeasure] = useState(62);
   const [phraseWords, setPhraseWords] = useState(3);
   const [isEditing, setIsEditing] = useState(false);
+  const [listenState, setListenState] = useState("idle"); // idle | playing | paused
+  const [toolbarInView, setToolbarInView] = useState(true);
 
   const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
 
   const timerRef = useRef(null);
-  const wiRef = useRef(0);
   const audioRef = useRef(null);
-  const [listenState, setListenState] = useState("idle"); // idle | playing | paused
-  useEffect(() => { wiRef.current = wi; }, [wi]);
-
-  // Track the narration <audio> element's own play/pause/ended state, so the
-  // Listen button (available in every mode) can show Listen / Pause / Resume
-  // accurately instead of guessing from a locally-tracked flag that can drift.
-  useEffect(() => {
-    const a = audioRef.current;
-    if (!a) return;
-    const onPlay = () => setListenState("playing");
-    const onPause = () => setListenState(a.ended ? "idle" : "paused");
-    const onEnded = () => setListenState("idle");
-    a.addEventListener("play", onPlay);
-    a.addEventListener("pause", onPause);
-    a.addEventListener("ended", onEnded);
-    return () => {
-      a.removeEventListener("play", onPlay);
-      a.removeEventListener("pause", onPause);
-      a.removeEventListener("ended", onEnded);
-    };
-  }, [narration]);
+  const stopAtRef = useRef(null);
+  const toolbarRef = useRef(null);
+  const onKeyRef = useRef(null);
 
   // Cleaned text paragraphs
   const paragraphs = useMemo(() => {
@@ -96,71 +104,138 @@ function ReadingRoom() {
 
   const words = useMemo(() => wordGroups.reduce((acc, g) => acc.concat(g.map(x => x.t)), []), [wordGroups]);
 
+  // Phrases and sentences carry their word range [ws, we) so each one can be
+  // matched to its stretch of narration audio.
   const phraseGroups = useMemo(() => {
     let gi = 0;
-    return paragraphs.map(p => {
+    let wordPos = 0;
+    return wordGroups.map(group => {
       const out = [];
       let cur = [];
-      p.split(/\s+/).filter(Boolean).forEach(w => {
-        cur.push(w);
-        const breaks = /[.,;:!?—–"')]$/.test(w);
-        if (cur.length >= phraseWords || (breaks && cur.length >= Math.max(2, phraseWords - 1))) {
-          out.push({ t: cur.join(" "), i: gi++ });
-          cur = [];
-        }
+      const flush = () => {
+        out.push({ t: cur.join(" "), i: gi++, ws: wordPos, we: wordPos + cur.length });
+        wordPos += cur.length;
+        cur = [];
+      };
+      group.forEach(w => {
+        cur.push(w.t);
+        const breaks = /[.,;:!?—–"')]$/.test(w.t);
+        if (cur.length >= phraseWords || (breaks && cur.length >= Math.max(2, phraseWords - 1))) flush();
       });
-      if (cur.length) out.push({ t: cur.join(" "), i: gi++ });
+      if (cur.length) flush();
       return out;
     });
-  }, [paragraphs, phraseWords]);
+  }, [wordGroups, phraseWords]);
 
   const phrases = useMemo(() => phraseGroups.reduce((acc, g) => acc.concat(g), []), [phraseGroups]);
 
   const sentences = useMemo(() => {
-    const flat = rawText.replace(/\s+/g, " ").trim();
-    const m = flat.match(/[^.!?]+[.!?]*\s*/g);
-    return (m || [flat]).map(s => s.trim()).filter(Boolean);
-  }, [rawText]);
+    const out = [];
+    let wordPos = 0;
+    wordGroups.forEach(group => {
+      let cur = [];
+      group.forEach((w, k) => {
+        cur.push(w.t);
+        const next = group[k + 1];
+        const ends = !next || (SENTENCE_END.test(w.t) && !isAbbreviation(w.t) && !startsLowercase(next.t));
+        if (ends) {
+          out.push({ t: cur.join(" "), ws: wordPos, we: wordPos + cur.length });
+          wordPos += cur.length;
+          cur = [];
+        }
+      });
+    });
+    return out;
+  }, [wordGroups]);
+
+  const ts = narration?.wordTimestamps || null;
+  const synced = !!narration && narration.timing === "measured" && !!ts && ts.length === words.length;
+
+  // Page mode always plays through the audio (or browser speech); the paced
+  // modes do too once word times are trustworthy, otherwise they run on a timer.
+  const audioDriven = synced || mode === "page";
+  const isPlaying = audioDriven ? listenState === "playing" : playing;
+  const canResume = synced ? wi > 0 : mode === "page" ? listenState === "paused" : wi > 0;
 
   const stopTimer = () => {
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; }
   };
   const stopSpeech = () => { if (ttsSupported) window.speechSynthesis.cancel(); };
-  const stopNarrationAudio = () => {
+  const pauseAudio = () => {
+    stopAtRef.current = null;
     const a = audioRef.current;
-    if (a) { a.pause(); a.ontimeupdate = null; a.onended = null; }
+    if (a && !a.paused) a.pause();
   };
 
-  // Best-effort default voice for the browser-TTS fallback (no picker UI —
-  // this only matters for a reading with no baked narration).
-  const pickVoice = () => {
-    if (!ttsSupported) return null;
-    const list = window.speechSynthesis.getVoices();
-    return list.find(v => /en/i.test(v.lang) && /premium|enhanced|natural|neural/i.test(v.name))
-      || list.find(v => /en/i.test(v.lang))
-      || list[0]
-      || null;
+  const seekToWord = (i) => {
+    setWi(i);
+    const a = audioRef.current;
+    if (a && synced) a.currentTime = i <= 0 ? 0 : ts[i].start;
   };
 
-  const speakSpeech = useCallback((text, { onEnd, rate } = {}) => {
-    if (!ttsSupported) return;
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(text);
-    const v = pickVoice();
-    if (v) utter.voice = v;
-    utter.rate = rate ?? clampRate(wpm);
-    if (onEnd) utter.onend = onEnd;
-    window.speechSynthesis.speak(utter);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ttsSupported, wpm]);
+  const playRange = (ws, we) => {
+    const a = audioRef.current;
+    if (!a || !synced || we <= ws) return;
+    const lastEnd = ts[we - 1].end;
+    stopAtRef.current = we < ts.length ? Math.max(lastEnd, Math.min(lastEnd + 0.12, ts[we].start)) : null;
+    a.currentTime = Math.max(0, ts[ws].start - 0.03);
+    a.playbackRate = rate;
+    a.play().catch(() => {});
+  };
 
-  const narrationActive = !!narration;
-
-  // Continuous playback driver for guide / word modes — purely visual,
-  // timer-paced. Narration audio only ever plays on the Page mode's Listen
-  // control (see toggleListen); these modes don't touch it at all.
+  // Track the narration <audio> element's own play/pause/ended state rather
+  // than a locally-kept flag that can drift from what is actually sounding.
   useEffect(() => {
-    if (!playing || (mode !== "guide" && mode !== "word")) { stopTimer(); return; }
+    const a = audioRef.current;
+    if (!a) return;
+    const onPlay = () => setListenState("playing");
+    const onPause = () => setListenState(a.ended || a.currentTime === 0 ? "idle" : "paused");
+    const onEnded = () => { stopAtRef.current = null; a.currentTime = 0; setWi(0); setListenState("idle"); };
+    a.addEventListener("play", onPlay);
+    a.addEventListener("pause", onPause);
+    a.addEventListener("ended", onEnded);
+    return () => {
+      a.removeEventListener("play", onPlay);
+      a.removeEventListener("pause", onPause);
+      a.removeEventListener("ended", onEnded);
+    };
+  }, [narration]);
+
+  // While narration plays: move the word cursor with it, and stop at the end
+  // of a phrase/sentence when only that stretch was asked for. timeupdate is
+  // the backstop for background tabs, where animation frames are paused.
+  useEffect(() => {
+    const a = audioRef.current;
+    if (!a || !synced || listenState !== "playing") return;
+    const check = () => {
+      const t = a.currentTime;
+      const stopAt = stopAtRef.current;
+      if (stopAt != null) {
+        if (t >= stopAt) { stopAtRef.current = null; a.pause(); }
+        return;
+      }
+      let lo = 0, hi = ts.length - 1, at = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (ts[mid].start <= t) { at = mid; lo = mid + 1; } else { hi = mid - 1; }
+      }
+      setWi(prev => (prev === at ? prev : at));
+    };
+    let raf;
+    const tick = () => { check(); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    a.addEventListener("timeupdate", check);
+    return () => { cancelAnimationFrame(raf); a.removeEventListener("timeupdate", check); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [synced, listenState]);
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = rate;
+  }, [rate]);
+
+  // Timer-paced playback for guide / word modes when there is no synced audio.
+  useEffect(() => {
+    if (synced || !playing || (mode !== "guide" && mode !== "word")) { stopTimer(); return; }
 
     const stepCount = mode === "guide" ? phraseWords : 1;
     const intervalMs = (stepCount * 60000) / wpm;
@@ -173,104 +248,147 @@ function ReadingRoom() {
       });
     }, intervalMs);
     return stopTimer;
-  }, [playing, wpm, mode, phraseWords, words.length]);
+  }, [synced, playing, wpm, mode, phraseWords, words.length]);
+
+  // Best-effort default voice for the browser-TTS fallback (no picker UI —
+  // this only matters for a reading with no baked narration).
+  const pickVoice = () => {
+    if (!ttsSupported) return null;
+    const list = window.speechSynthesis.getVoices();
+    return list.find(v => /en/i.test(v.lang) && /premium|enhanced|natural|neural/i.test(v.name))
+      || list.find(v => /en/i.test(v.lang))
+      || list[0]
+      || null;
+  };
+
+  const toggleBrowserSpeech = () => {
+    if (!ttsSupported) return;
+    const synth = window.speechSynthesis;
+    if (synth.speaking && !synth.paused) { synth.pause(); setListenState("paused"); return; }
+    if (synth.paused) { synth.resume(); setListenState("playing"); return; }
+    synth.cancel();
+    const utter = new SpeechSynthesisUtterance(paragraphs.join(". "));
+    const v = pickVoice();
+    if (v) utter.voice = v;
+    utter.rate = rate;
+    utter.onend = () => setListenState("idle");
+    setListenState("playing");
+    synth.speak(utter);
+  };
+
+  const toggleNarration = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (!a.paused) { a.pause(); return; }
+    stopAtRef.current = null;
+    a.playbackRate = rate;
+    a.play().catch(() => {});
+  };
+
+  const togglePlay = () => {
+    if (narration && audioDriven) toggleNarration();
+    else if (mode === "page") toggleBrowserSpeech();
+    else setPlaying(p => !p);
+  };
+
+  const resetAll = () => {
+    setPlaying(false); setWi(0); setChunk(0); setLine(0);
+    stopSpeech(); pauseAudio();
+    if (audioRef.current) audioRef.current.currentTime = 0;
+    setListenState("idle");
+  };
 
   // Reset state on text change
   useEffect(() => {
-    setPlaying(false); setWi(0); setChunk(0); setLine(0);
-    stopListen();
+    resetAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawText]);
 
-  // Keyboard controls
+  const goPhrase = (next) => {
+    const n = Math.max(0, Math.min(phrases.length, next));
+    setChunk(n);
+    if (!synced) return;
+    if (n > 0) playRange(phrases[n - 1].ws, phrases[n - 1].we);
+    else pauseAudio();
+  };
+
+  const goLine = (next) => {
+    const n = Math.max(0, Math.min(sentences.length - 1, next));
+    setLine(n);
+    if (synced && sentences[n]) playRange(sentences[n].ws, sentences[n].we);
+  };
+
+  // Switching modes keeps your place in the text instead of starting over.
+  const handleModeSelect = (mId) => {
+    let w = Math.min(wi, Math.max(0, words.length - 1));
+    if (mode === "phrase") w = chunk > 0 ? phrases[chunk - 1].ws : 0;
+    if (mode === "window") w = sentences[line] ? sentences[line].ws : 0;
+    setPlaying(false); stopSpeech(); pauseAudio();
+    if (!narration) setListenState("idle");
+    setMode(mId);
+    seekToWord(w);
+    setChunk(w > 0 ? phrases.findIndex(p => w < p.we) + 1 : 0);
+    setLine(Math.max(0, sentences.findIndex(s => w < s.we)));
+  };
+
+  onKeyRef.current = (e) => {
+    const activeTag = document.activeElement ? document.activeElement.tagName : "";
+    if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(activeTag) || document.activeElement.isContentEditable) {
+      if (e.code === "Space" && activeTag === "BUTTON") return;
+      if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
+    }
+    if (e.code === "Space" || e.key === " ") {
+      if (mode === "guide" || mode === "word") { e.preventDefault(); togglePlay(); }
+      else if (mode === "phrase") { e.preventDefault(); goPhrase(chunk + 1); }
+      else if (mode === "window" && synced) { e.preventDefault(); goLine(line); }
+    }
+    if (mode === "phrase") {
+      if (e.key === "ArrowRight") { e.preventDefault(); goPhrase(chunk + 1); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); goPhrase(chunk - 1); }
+    }
+    if (mode === "window") {
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); goLine(line + 1); }
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); goLine(line - 1); }
+    }
+  };
   useEffect(() => {
-    const handleKeyDown = (e) => {
-      const activeTag = document.activeElement ? document.activeElement.tagName : "";
-      if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(activeTag) || document.activeElement.isContentEditable) {
-        if (e.code === "Space" && activeTag === "BUTTON") return;
-        if (activeTag === "INPUT" || activeTag === "TEXTAREA") return;
-      }
-      if (e.code === "Space" || e.key === " ") {
-        if (mode === "guide" || mode === "word") { e.preventDefault(); setPlaying(p => !p); }
-        else if (mode === "phrase") { e.preventDefault(); advancePhrase(1); }
-      }
-      if (mode === "phrase") {
-        if (e.key === "ArrowRight") { e.preventDefault(); advancePhrase(1); }
-        if (e.key === "ArrowLeft") { e.preventDefault(); advancePhrase(-1); }
-      }
-      if (mode === "window") {
-        if (e.key === "ArrowDown" || e.key === "ArrowRight") { e.preventDefault(); moveLine(1); }
-        if (e.key === "ArrowUp" || e.key === "ArrowLeft") { e.preventDefault(); moveLine(-1); }
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, phrases.length, sentences.length]);
+    const handler = (e) => onKeyRef.current(e);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
 
-  const advancePhrase = (dir) => {
-    setChunk(c => Math.max(0, Math.min(phrases.length, c + dir)));
-  };
+  // Keep the spot being read on screen.
+  useEffect(() => {
+    let selector = null;
+    if ((mode === "page" || mode === "guide") && isPlaying) selector = `[data-w="${wi}"]`;
+    else if (mode === "phrase" && chunk > 0) selector = `[data-c="${chunk - 1}"]`;
+    else if (mode === "window") selector = `[data-l="${line}"]`;
+    const el = selector && document.querySelector(selector);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.top < 80 || r.bottom > window.innerHeight - 120) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [mode, isPlaying, wi, chunk, line]);
 
-  const moveLine = (dir) => {
-    setLine(l => Math.max(0, Math.min(sentences.length - 1, l + dir)));
-  };
+  // Once the page has scrolled past the toolbar, a floating Pause/Resume
+  // stands in for the button that is no longer reachable.
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([entry]) => setToolbarInView(entry.isIntersecting));
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   const activeMode = MODES.find(m => m.id === mode) || MODES[0];
-
-  // Deliberately don't touch narration playback here — Listen runs
-  // independently of the pacing mode now, so switching modes or resetting
-  // pacing progress shouldn't interrupt it.
-  const handleReset = () => {
-    setPlaying(false); setWi(0); setChunk(0); setLine(0);
-    stopSpeech();
-  };
-  const handleModeSelect = (mId) => {
-    setPlaying(false); setMode(mId); setWi(0); setChunk(0); setLine(0);
-    stopSpeech();
-    // Listen only has a visible control on the Page mode — pause (not reset)
-    // narration audio when leaving it, so it doesn't keep running with no
-    // way to stop it. Resuming in Page mode picks back up where it left off.
-    if (audioRef.current && !audioRef.current.paused) audioRef.current.pause();
-  };
-
-  const stopListen = () => {
-    stopSpeech(); stopNarrationAudio(); setListenState("idle");
-    if (audioRef.current) audioRef.current.currentTime = 0;
-  };
+  const showSpeed = narration ? audioDriven : mode === "page" && ttsSupported;
+  const showPageMark = synced && (isPlaying || wi > 0);
+  const showFloatingTransport = !toolbarInView && (mode === "page" || mode === "guide") && (isPlaying || canResume);
 
   const getProgressText = () => {
     if (mode === "phrase") return `${chunk} of ${phrases.length} phrases`;
     if (mode === "window") return `Line ${line + 1} of ${sentences.length}`;
     if (mode === "page") return "";
     return `Word ${Math.min(wi + 1, words.length)} of ${words.length}`;
-  };
-
-  const toggleListen = () => {
-    if (narrationActive) {
-      const a = audioRef.current;
-      if (!a) return;
-      if (!a.paused) { a.pause(); return; } // -> "paused" via the play/pause listener
-      if (a.ended) a.currentTime = 0; // only rewind after a full run-through
-      a.playbackRate = clampRate(wpm);
-      a.ontimeupdate = null;
-      a.onended = null;
-      a.play().catch(() => {});
-      return;
-    }
-    if (!ttsSupported) return;
-    if (window.speechSynthesis.speaking && !window.speechSynthesis.paused) {
-      window.speechSynthesis.pause();
-      setListenState("paused");
-      return;
-    }
-    if (window.speechSynthesis.paused) {
-      window.speechSynthesis.resume();
-      setListenState("playing");
-      return;
-    }
-    setListenState("playing");
-    speakSpeech(paragraphs.join(". "), { onEnd: () => setListenState("idle") });
   };
 
   return (
@@ -304,40 +422,50 @@ function ReadingRoom() {
           })}
         </div>
 
-        <div className="toolbar">
+        <div className="toolbar" ref={toolbarRef}>
           {(mode === "guide" || mode === "word") && (
             <div className="transport">
-              <button type="button" onClick={() => setPlaying(!playing)} className="btn-primary">
-                {playing ? "Pause" : wi > 0 ? "Resume" : "Start"}
+              <button type="button" onClick={togglePlay} className="btn-primary">
+                {isPlaying ? "Pause" : canResume ? "Resume" : "Start"}
               </button>
-              <button type="button" onClick={handleReset} className="btn-secondary">Reset</button>
+              <button type="button" onClick={resetAll} className="btn-secondary">Reset</button>
               <span className="progress-text">{getProgressText()}</span>
             </div>
           )}
           {mode === "phrase" && (
             <div className="transport">
-              <button type="button" onClick={() => advancePhrase(-1)} className="btn-secondary">← Back</button>
-              <button type="button" onClick={() => advancePhrase(1)} className="btn-primary">Next phrase →</button>
+              <button type="button" onClick={() => goPhrase(chunk - 1)} className="btn-secondary">← Back</button>
+              <button type="button" onClick={() => goPhrase(chunk + 1)} className="btn-primary">Next phrase →</button>
               <span className="progress-text">{getProgressText()}</span>
             </div>
           )}
           {mode === "window" && (
             <div className="transport">
-              <button type="button" onClick={() => moveLine(-1)} className="btn-secondary">↑ Up</button>
-              <button type="button" onClick={() => moveLine(1)} className="btn-primary">Down ↓</button>
+              <button type="button" onClick={() => goLine(line - 1)} className="btn-secondary">↑ Up</button>
+              <button type="button" onClick={() => goLine(line + 1)} className="btn-primary">Down ↓</button>
               <span className="progress-text">{getProgressText()}</span>
             </div>
           )}
-          {mode === "page" && (narrationActive || ttsSupported) && (
+          {mode === "page" && (narration || ttsSupported) && (
             <div className="transport">
-              <button type="button" onClick={toggleListen} className="btn-primary">
-                {listenState === "playing" ? "Pause" : listenState === "paused" ? "Resume" : "Listen"}
+              <button type="button" onClick={togglePlay} className="btn-primary">
+                {isPlaying ? "Pause" : canResume ? "Resume" : "Listen"}
               </button>
+              {synced && canResume && (
+                <button type="button" onClick={resetAll} className="btn-secondary">Reset</button>
+              )}
             </div>
           )}
 
           <div className="sliders">
-            {(mode === "guide" || mode === "word") && (
+            {showSpeed && (
+              <label className="slider-label">
+                Speed
+                <input type="range" min="0.5" max="1.5" step="0.1" value={rate} onChange={e => setRate(Number(e.target.value))} style={{ width: 112 }} />
+                <span className="slider-value">{rate.toFixed(1)}×</span>
+              </label>
+            )}
+            {(mode === "guide" || mode === "word") && !synced && (
               <label className="slider-label">
                 Pace
                 <input type="range" min="80" max="520" step="20" value={wpm} onChange={e => setWpm(Number(e.target.value))} style={{ width: 112 }} />
@@ -367,7 +495,12 @@ function ReadingRoom() {
         <div className="stage">
           {mode === "page" && (
             <div style={{ fontSize: `${size}px`, maxWidth: `${measure}ch` }} className="stage-inner">
-              {paragraphs.map((p, idx) => <p key={idx} className="page-p">{p}</p>)}
+              {synced
+                ? wordGroups.map((group, idx) => {
+                    const here = showPageMark && wi >= group[0].i && wi <= group[group.length - 1].i;
+                    return <PageParagraph key={idx} group={group} active={here ? wi : -1} />;
+                  })
+                : paragraphs.map((p, idx) => <p key={idx} className="page-p">{p}</p>)}
             </div>
           )}
 
@@ -376,10 +509,10 @@ function ReadingRoom() {
               {wordGroups.map((group, pIdx) => (
                 <p key={pIdx}>
                   {group.map(w => {
-                    const active = playing && w.i >= wi && w.i < wi + phraseWords;
+                    const active = isPlaying && w.i >= wi && w.i < wi + phraseWords;
                     const passed = wi > 0 && w.i < wi;
                     return (
-                      <span key={w.i} className="word-token" style={{
+                      <span key={w.i} data-w={w.i} className="word-token" style={{
                         backgroundColor: active ? "#F7EBE8" : "transparent",
                         borderBottom: active ? "2px solid #C2593F" : "2px solid transparent",
                         color: active ? "#2C2825" : passed ? "#9A938A" : "#44403C"
@@ -399,7 +532,7 @@ function ReadingRoom() {
                     const isCurrent = c.i === chunk - 1;
                     const isPast = c.i < chunk - 1;
                     return (
-                      <span key={c.i} className="chunk-token" style={{
+                      <span key={c.i} data-c={c.i} className="chunk-token" style={{
                         backgroundColor: isCurrent ? "#F7EBE8" : "transparent",
                         borderBottom: isCurrent ? "2px solid #C2593F" : "2px solid transparent",
                         color: isCurrent ? "#2C2825" : isPast ? "#B0A89E" : "transparent"
@@ -430,8 +563,8 @@ function ReadingRoom() {
                 else if (dist === 1) opacity = 0.65;
                 else if (dist === 2) opacity = 0.35;
                 return (
-                  <div key={i} className="window-line" style={{ opacity, borderLeftColor: dist === 0 ? "#C2593F" : "transparent" }}>
-                    {sent}
+                  <div key={i} data-l={i} onClick={() => goLine(i)} className="window-line" style={{ opacity, borderLeftColor: dist === 0 ? "#C2593F" : "transparent" }}>
+                    {sent.t}
                   </div>
                 );
               })}
@@ -441,9 +574,15 @@ function ReadingRoom() {
 
         <div className="hint-bar">
           <span className="hint-text">💡 {activeMode.keys}</span>
-          <button type="button" onClick={handleReset} className="link-btn">Start over</button>
+          <button type="button" onClick={resetAll} className="link-btn">Start over</button>
         </div>
       </div>
+
+      {showFloatingTransport && (
+        <button type="button" onClick={togglePlay} className="btn-primary float-transport">
+          {isPlaying ? "Pause" : "Resume"}
+        </button>
+      )}
 
       {isEditing && !locked && (
         <div className="modal-overlay">
